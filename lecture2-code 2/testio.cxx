@@ -42,7 +42,7 @@ int main()
 
     blitz::Array<float, 2> r(io.count(), 3);
     io.load(r);
-    std::cout << r << std::endl;
+    //std::cout << r << std::endl;
 
     // This blitz array is constructed to get the first 10 particle location as Exercise 2 asked.
     blitz::Array<float, 2> first10(10, 3);
@@ -62,11 +62,30 @@ int main()
     //By using the function defined, it writes the new coordinates of i,j,k to the new blitz array new_axis.
     int nParticle = io.count();
     for (int a = 0; a < nParticle; ++a)
-    {
+    { 
         x = r(a, 0);
         y = r(a, 1);
         z = r(a, 2);
-        new_axis(axis_conversion(x), axis_conversion(y), axis_conversion(z)) += 1;
+
+        for (int i = 0; i < 4; ++i)
+    {
+        for (int j = 0; j < 4; ++j)
+        {
+            for (int k = 0; k < 4; ++k)
+            {
+                int t,y,u;
+                
+                AssignmentWeights<4> w4a(axis_conversion(i));
+                AssignmentWeights<4> w4b(axis_conversion(j));
+                AssignmentWeights<4> w4c(axis_conversion(k));
+                t = (w4a.i+i+N) % N;
+                y = (w4b.i+j+N) % N;
+                u = (w4c.i+k+N) % N;
+                new_axis(t , y , u) += w4a.H[i] * w4b.H[j] * w4c.H[k];
+            }
+        }
+    }
+
     }
 
     //std::cout << new_axis << std::endl;
@@ -98,26 +117,26 @@ int main()
     std::cout << "\n---------------------------------------------------------------------" << std::endl;
   
 */
-/*
-    //Mass assignment for 4th order.
-    for (int i = 0; i < nParticle; ++i)
-    {
-        for (int j = 0; j < nParticle; ++j)
-        {
-            for (int k = 0; k < nParticle; ++k)
-            {
-              
-                AssignmentWeights<4> w4a(new_axis(i));
-                AssignmentWeights<4> w4b(new_axis(j));
-                AssignmentWeights<4> w4c(new_axis(k));
-                new_axis(axis_conversion(w4a.i) + axis_conversion(w4b.i) + axis_conversion(w4c.i)) += w4a.H[0] * w4b.H[1] * w4c.H[2];
-            }
-        }
-    }
 
-*/
-    std::cout << new_axis << std::endl;
-    std::cout << "\n---------------------------------------------------------------------" << std::endl;
+    //Mass assignment for 4th order.
+    // for (int i = 0; i < 4; ++i)
+    // {
+    //     for (int j = 0; j < 4; ++j)
+    //     {
+    //         for (int k = 0; k < 4; ++k)
+    //         {
+              
+    //             AssignmentWeights<4> w4a(new_axis(i));
+    //             AssignmentWeights<4> w4b(new_axis(j));
+    //             AssignmentWeights<4> w4c(new_axis(k));
+    //             new_axis((w4a.i+i) + (w4b.i+j) + (w4c.i+k)) += w4a.H[i] * w4b.H[j] * w4c.H[k];
+    //         }
+    //     }
+    // }
+
+
+   // std::cout << new_axis << std::endl;
+   // std::cout << "\n---------------------------------------------------------------------" << std::endl;
     
     // blitz::thirdIndex k;
     // blitz::Array<float,2> reduced_axis(64,64);
