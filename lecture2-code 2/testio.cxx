@@ -31,7 +31,7 @@ int main()
 {
     TipsyIO io;
 
-    io.open("b0-final.std");
+    io.open("/store/uzh/uzh8/ESC412/ic_512.std");
     std::cout << io.count() << std::endl;
 
     if (io.fail())
@@ -54,7 +54,7 @@ int main()
     double x, y, z;
 
     // This blitz array shows a 3D cell with the dimensions of 64x64x64.
-    int N = 64;
+    int N = 512;
     blitz::Array<float, 3> new_axis(N, N, N);
     new_axis = 0.0;
 
