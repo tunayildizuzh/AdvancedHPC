@@ -125,7 +125,7 @@ void assign_masses(int o, array2D_r p, array3D_r grid){
     real_type avg = 1.0*N_part / (shape[0]*shape[1]*shape[2]);
 
     t0 = getTime();
-    // #pragma omg parallel for
+    #pragma omg parallel for
     for(int i=0; i<N_part; ++i)
         assign_mass(o, p(i,0), p(i,1), p(i,2), grid);
 
