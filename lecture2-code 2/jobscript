@@ -1,0 +1,17 @@
+#!/bin/bash -l
+#SBATCH --job-name="test"
+#SBATCH --account="uzh8"
+#SBATCH --time=0:30:00
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-core=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=128
+#SBATCH --partition=debug
+#SBATCH --hint=nomultithread
+#SBATCH --constraint=mc
+#SBATCH --output=AtomicParallelRunThread128.txt
+
+
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+
+srun ./main

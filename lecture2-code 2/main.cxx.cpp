@@ -95,6 +95,7 @@ void _assign_mass(real_type x, real_type y, real_type z, array3D_r grid){
                 i = (wx.i+ii+shape[0])%shape[0];
                 j = (wy.i+jj+shape[1])%shape[1];
                 k = (wz.i+kk+shape[2])%shape[2];
+		#pragma omp atomic
                 grid(i,j,k) += wx.H[ii]*wy.H[jj]*wz.H[kk];
             }
         }

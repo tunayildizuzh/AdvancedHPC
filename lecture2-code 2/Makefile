@@ -1,12 +1,12 @@
-CXX=g++
+CXX=CC
 CXXFLAGS=-std=c++17# -O2
-INCLUDE=-I/Users/tunayildiz/Desktop/CPPDocuments/blitz
-all:testio
+INCLUDE=-I/users/yerdemtu/blitz/include
+all:main
 tipsy.o:tipsy.cxx
 	${CXX} -c $(CXXFLAGS) $(INCLUDE) -o $@ $<
-testio.o: testio.cxx aweights.hpp
+main.o: main.cxx.cpp aweights.hpp
 	${CXX} -c $(CXXFLAGS) $(INCLUDE) -o $@ $<
-testio: tipsy.o testio.o
-	${CXX} $(CXXFLAGS) $(INCLUDE) -o testio tipsy.o testio.o
+main: tipsy.o main.o
+	${CXX} $(CXXFLAGS) $(INCLUDE) -o main tipsy.o main.o
 clean:
-	rm -f tipsy.o testio.o testio
+	rm -f tipsy.o main.o main
