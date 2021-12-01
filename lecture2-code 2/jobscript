@@ -9,9 +9,9 @@
 #SBATCH --partition=debug
 #SBATCH --hint=nomultithread
 #SBATCH --constraint=mc
-#SBATCH --output=AtomicParallelRunThread128.txt
+##SBATCH --output=AtomicParallelRunThread128.txt
 
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-srun ./main
+srun ./main > terminal101200utput.out

@@ -4,7 +4,8 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <fftw3.h>
-
+#include <mpi.h>
+#include <omp.h>
 #include "aweights.hpp"
 #include "tipsy.h"
 
@@ -30,7 +31,7 @@ double getTime() {
 
 // Read the particle file,
 // return a 2d blitz array containing particle positions
-array2D_r read_particles(string fname){
+array2D_r read_particles(string fname,int size,int rank){
     double t0, elapsed;
     TipsyIO io;
 
@@ -41,9 +42,18 @@ array2D_r read_particles(string fname){
         cerr << "Unable to open file" << endl;
         abort();
     }
-
+    int N = io.count();
+    int n = (N + (size-1))/size;
+    int istart = rank*n
+    int iend;
+    int num_rows = N/size;
+    if(istart + n-1 < N){
+	iend = istart + n-1;
+    } else {
+        iend = N - 1;
+    }
     // Allocate the particle buffer
-    array2D_r p(io.count(),3);
+    array2D_r p(blitz::Range(istart,iend),blitz::Range(0,2));
     
     t0 = getTime();
     // Read the particles
@@ -117,18 +127,25 @@ void assign_mass(int o, real_type x, real_type y, real_type z, array3D_r grid){
 }
 
 // Mass assignment for a list of particles
-void assign_masses(int o, array2D_r p, array3D_r grid){
+void assign_masses(int o, array2D_r p, array3D_r &grid, int rank, int size){
     double t0, elapsed;
-    auto N_part = p.shape()[0];
+    auto N_part = p.shape()[0]; // Do i still need this?
     auto shape = grid.shape();
-
-    // Compute the average density per grid cell
-    real_type avg = 1.0*N_part / (shape[0]*shape[1]*shape[2]);
-
+    
+    array3D_r grid_nopad = grid(blitz::Range::all(), blitz::Range::all(),blitz::                                Range(0,shape[2]-3]));    
     t0 = getTime();
     #pragma omg parallel for
-    for(int i=0; i<N_part; ++i)
-        assign_mass(o, p(i,0), p(i,1), p(i,2), grid);
+    for(auto i=p.lbound(0), i <= p.ubound(0); ++i){
+        assign_mass(o, p(i,0), p(i,1), p(i,2), grid_nopad);
+    }
+    if(rank==0){
+	    MPI_Reduce(MPI_IN_PLACE,grid.data(),grid.size(),MPI_DOUBLE,MPI_SUM,0,MPI_COMM_WORLD);
+    }else{
+	    MPI_Reduce(grid.data(),NULL,grid.size(),MPI_DOUBLE,MPI_SUM,0,MPI_COM            M_WORLD);
+    }
+    
+    // Compute the average density per grid cell
+    real_type avg = blitz::sum(grid_nopad) / (grid_nopad.size());
 
     // Turn the density into the over-density
     grid = (grid - avg) / avg;
@@ -137,6 +154,7 @@ void assign_masses(int o, array2D_r p, array3D_r grid){
 }
 
 // Call mass assignment at every order to test implementation
+/*
 void test_assignment(array2D_r p, int N){
     array3D_r grid(N,N,N);
     cout << "Testing mass assignment:" <<endl;
@@ -152,8 +170,9 @@ void test_assignment(array2D_r p, int N){
     }
     cout << "Done" <<endl<<endl;
 }
+*/
 
-void compute_fft(array3D_r grid, array3D_c fft_grid, int N){
+void compute_fft(array3D_r grid, array3D_c fft_grid, int N, MPI_Comm comm){
     double t0, elapsed;
 
     // Create FFTW plan
@@ -184,13 +203,6 @@ void compute_pk(array3D_c fft_grid, int N){
     double k_max = sqrt(3) * (iNyquist+1);
     double scale = nBins * 1.0 / log(k_max);
 
-    // LIN SPACED BINS:
-    // bin_idx = floor( k_norm / k_max * nBins )
-
-    // LOG SPACED BINS:
-    // bin_idx = floor ( log(k_norm) * scale )
-    //         = floor ( nBins * log(k_norm) / log(k_max) )
-
     blitz::Array<double,1>  log_k(nBins);
     blitz::Array<double,1>  power(nBins);
     blitz::Array<int64_t,1> n_power(nBins);
@@ -200,11 +212,6 @@ void compute_pk(array3D_c fft_grid, int N){
     log_k = 0;
     power = 0;
     n_power = 0;
-
-    // Mode ordering by fftw:
-    // 0, 1, 2, ..., N/2, -(N/2-1), ..., -2, -1
-    // 0, 1, 2, ..., N/2, -(N/2-1), ..., -2, -1
-    // 0, 1, 2, ..., N/2
 
     t0 = getTime();
     for( auto index=fft_grid.begin(); index!=fft_grid.end(); ++index ) {
@@ -237,12 +244,87 @@ void compute_pk(array3D_c fft_grid, int N){
         }
     }
 }
+// Communicating with FFTW to determine how the data is organized.
+// N is being the grid size and returns the number of slabs (local_n0)
+// local_0_start is the starting slab.
+alloc_local = fftw_mpi_local_size_3d(N,N,N/2+1, MPI_COMM_WORLD, &local_n0, &local_0_start);
+blitz::Array<int,1> starts(size); // Array to hold the start slab of each rank.
+int s = local_0_start;
 
-int main() {
-    int N = 512;
+void count_sort(vector<double> &arr, vector<int> idx, int max_idx){ 
+    vector<int> count(max_idx + 1);
+    vector<double> out(arr.size());
+
+    for (int i = 0; i < arr.size(); i++)
+        count[idx[i]]++;
+
+    for (int i = 1; i < count.size(); i++)
+        count[i] += count[i - 1];
+
+    for (int i = arr.size() - 1; i >= 0; i--){
+        out[count[idx[i]] - 1] = arr[i];
+        count[idx[i]]--;
+    }
+
+    for (int i = 0; i < arr.size(); i++)
+        arr[i] = out[i];
+}
+
+void printArray(vector<double>& arr){
+    for (int i = 0; i < arr.size(); i++)
+        cout << arr[i] << " ";
+    cout << "\n";
+}
+
+vector<int> count_list[N+1];
+
+int main(int argc, char *argv[]) {
+    int thread_support;
+    int rank;
+    int size;
+
+    MPI_Init_thread(&argc,&argv, MPI_THREAD_FUNNELED,&thread_support);
+    MPI_Comm_size(MPI_COMM_WORLD,&size);
+    MPI_Comm_rank(MPI_COMM_WORLD,&rank);
+
+    fftw_mpi_init();
+    fftw_init_threads();
+    fftw_plan_with_nthreads(omp_get_max_threads());
+    int N = 64;
     string fname = "/store/uzh/uzh8/ESC412/ic_512.std"; 
-    array2D_r p = read_particles(fname);
-    
+    array2D_r p = read_particles(fname,rank,size);
+
+    MPI_Allgather(&s, 1, MPI_INT, starts.data(), 1, MPI_INT, MPI_COMM_WORLD);
+
+    MPI_Alltoall(&s,count_list.size(), MPI_INT, count_list,count_list.size(), MPI_INT, MPI_Comm com);
+    //Dummy Communicator fot FFTW-MPI (Rank 0 performs FFT).
+    // MPI_Comm dummy_comm;
+    //MPI_Comm_split(MPI_COMM_WORLD,rank,rank,&dummy_comm);
+
+    ptrdiff_t alloc_local, local_n0, local_0_start;
+
+    alloc_local = fftw_mpi_local_size_3d(N,N,N, dummy_comm, &local_n0, &local_0_start);
+    blitz::GeneralArrayStorage<3> storage;
+    storage.base(local_n0_start,0,0);
+    double *local_grid_space = fftw_alloc_real((local_n0_start+3)*N*(N+2));  // For the real part. 
+    array3D_r grid(local_grid_space,blitz::shape(local_n0_start+3,N,N+2,neverDeleteData,storage));    
+    // array3D_r grid(local_n0,N,N+2);
+    double *local_grid_space_complex = fftw_alloc_complex((local_n0+3)*N*(N/2));
+
+    assign_masses(4,p,grid,rank,size);
+    int dest = (rank +1) % 2 * size;
+    int src = (rank -1) % 2 * size;
+    // To avoid deadlock, MPI_Irecv is called before MPI_Send.
+    MPI_Request request;
+    MPI_Irecv(&grid, local_grid_space, MPI_DOUBLE, src, 0, MPI_COMM_WORLD, &request); 
+    MPI_Send(&grid, local_grid_space, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD);
+    array3D_c grid_complex(local_grid_space_complex,blitz::shape(local_n0+3,N,N+2,neverDeleteData,storage)); // For the complex part.
+    //array3D_c fft_grid(local_n0,N,N/2+1);
+    compute_fft(grid,grid_complex,N,MPI_COMM_WORLD);
+    compute_pl(grid_complex,N);
+    // CALL MPI_REDUCE FOR EACH ARRAY IN BIN. 
+    //cout << p << endl; //
+    /*  
     test_assignment(p, N); // Test the assignment schemes
 
     array3D_r grid(N,N,N);
@@ -257,5 +339,9 @@ int main() {
     
     // Compute the power spectrum
     compute_pk(fft_grid, N);
-    
+    */
+    fftw_mpi_cleanup();
+    MPI_Finalize();
+    fftw_free(grid);
+    fftw_free(grid_complex);
 }
