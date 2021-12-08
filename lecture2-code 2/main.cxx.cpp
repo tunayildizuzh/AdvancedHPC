@@ -132,7 +132,7 @@ void assign_masses(int o, array2D_r p, array3D_r &grid, int rank, int size){
     auto N_part = p.shape()[0]; // Do i still need this?
     auto shape = grid.shape();
     
-    array3D_r grid_nopad = grid(blitz::Range::all(), blitz::Range::all(),blitz::                                Range(0,shape[2]-3]));    
+    array3D_r grid_nopad = grid(blitz::Range::all(), blitz::Range::all(),blitz::Range(0,shape[2]-3]));    
     t0 = getTime();
     #pragma omg parallel for
     for(auto i=p.lbound(0), i <= p.ubound(0); ++i){
@@ -141,7 +141,7 @@ void assign_masses(int o, array2D_r p, array3D_r &grid, int rank, int size){
     if(rank==0){
 	    MPI_Reduce(MPI_IN_PLACE,grid.data(),grid.size(),MPI_DOUBLE,MPI_SUM,0,MPI_COMM_WORLD);
     }else{
-	    MPI_Reduce(grid.data(),NULL,grid.size(),MPI_DOUBLE,MPI_SUM,0,MPI_COM            M_WORLD);
+	    MPI_Reduce(grid.data(),NULL,grid.size(),MPI_DOUBLE,MPI_SUM,0,MPI_COMM_WORLD);
     }
     
     // Compute the average density per grid cell
@@ -248,8 +248,8 @@ void compute_pk(array3D_c fft_grid, int N){
 // N is being the grid size and returns the number of slabs (local_n0)
 // local_0_start is the starting slab.
 alloc_local = fftw_mpi_local_size_3d(N,N,N/2+1, MPI_COMM_WORLD, &local_n0, &local_0_start);
-blitz::Array<int,1> starts(size); // Array to hold the start slab of each rank.
-int s = local_0_start;
+//blitz::Array<int,1> starts(size); // Array to hold the start slab of each rank.
+//int s = local_0_start;
 
 void count_sort(vector<double> &arr, vector<int> idx, int max_idx){ 
     vector<int> count(max_idx + 1);
@@ -276,7 +276,46 @@ void printArray(vector<double>& arr){
     cout << "\n";
 }
 
-vector<int> count_list[N+1];
+vector<int> idx_vector = {1,0,0};
+
+vector<double> reorder_p(array2D_r p, int N, int starts_at) {
+	array2D_r reordered_p(blitz::Range(0,N),blitz::Range(0,2));
+	blitz::Array<int,1> starts_at(size+1); // Index starts from 0, so starts_at needs to be size+1.
+	int s = local_n0_start;
+        MPI_Allgather(&s, 1 ,MPI_INT, starts_at.data(), 1, MPI_INT, MPI_COMM_WORLD);
+
+	if (rank ==0) {
+		blitz::Array<int,1> cnts(N);
+		cnts = 0;
+		for(int j=p.lbound(0); j <= p.ubound(0); ++j{
+			       AssignmentWeights<4> wx(p(j,0)+0.5)*N);
+			       ++cnts;
+		}
+	}		
+	count_sort(&p,starts_at.size(),size+1);
+        MPI_Alltoall(&p,p.shape(),MPI_DOUBLE,&reordered_p,reordered_p.shape(),MPI_DOUBLE,MPI_COMM_WORLD);
+	int send_count[size];
+	for(int i =0; i < sizeof(send_count)/sizeof(send_count[0]); ++i) {
+		send_count[i] = io.count/size; // This is the number of particles that are sent and received per each slab and rank.
+	}
+	int disp[];
+	disp[0] = 0;
+	for(int i =1; i < sizeof(cnts)/sizeof(cnts[0]); ++i){
+		disp[i] = disp[i-1] + cnt[i-1];
+	}
+	MPI_Alltoallv(&p,send_count,disp,MPI_DOUBLE,reordered_p,disp,MPI_DOUBLE,MPI_COMM_WORLD);
+}
+
+void PPS_Binning(int rank,int size) {	// Parallel Power Spectrum binning with MPI_Reduce.
+
+
+	MPI_Comm_size(MPI_COMM_WORLD,&size);
+	MPI_Comm_rank(MPI_COMM_WORLD,&rank);
+
+	MPI_Reduce(log_k, sizeof(log_k)/sizeof(log_k[0], MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+	MPI_Reduce(power, sizeof(power)/sizeof(power[0], MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+	MPI_Reduce(n_power, sizeof(n_power)/sizeof(n_power[0]), MPI_INT64_t, MPI_SUM, 0, MPI_COMM_WORLD);
+}
 
 int main(int argc, char *argv[]) {
     int thread_support;
@@ -294,16 +333,16 @@ int main(int argc, char *argv[]) {
     string fname = "/store/uzh/uzh8/ESC412/ic_512.std"; 
     array2D_r p = read_particles(fname,rank,size);
 
-    MPI_Allgather(&s, 1, MPI_INT, starts.data(), 1, MPI_INT, MPI_COMM_WORLD);
+   // MPI_Allgather(&s, 1, MPI_INT, starts.data(), 1, MPI_INT, MPI_COMM_WORLD);
 
-    MPI_Alltoall(&s,count_list.size(), MPI_INT, count_list,count_list.size(), MPI_INT, MPI_Comm com);
+    //MPI_Alltoall(&s,count_list.size(), MPI_INT, count_list,count_list.size(), MPI_INT, MPI_COMM_WORLD);
     //Dummy Communicator fot FFTW-MPI (Rank 0 performs FFT).
     // MPI_Comm dummy_comm;
     //MPI_Comm_split(MPI_COMM_WORLD,rank,rank,&dummy_comm);
 
     ptrdiff_t alloc_local, local_n0, local_0_start;
 
-    alloc_local = fftw_mpi_local_size_3d(N,N,N, dummy_comm, &local_n0, &local_0_start);
+    alloc_local = fftw_mpi_local_size_3d(N,N,N/2+1, MPI_COMM_WORLD, &local_n0, &local_0_start);
     blitz::GeneralArrayStorage<3> storage;
     storage.base(local_n0_start,0,0);
     double *local_grid_space = fftw_alloc_real((local_n0_start+3)*N*(N+2));  // For the real part. 
@@ -322,7 +361,9 @@ int main(int argc, char *argv[]) {
     //array3D_c fft_grid(local_n0,N,N/2+1);
     compute_fft(grid,grid_complex,N,MPI_COMM_WORLD);
     compute_pl(grid_complex,N);
-    // CALL MPI_REDUCE FOR EACH ARRAY IN BIN. 
+    
+    // Binning with MPI_Reduce.
+    PPS_Binning(rank,size); 
     //cout << p << endl; //
     /*  
     test_assignment(p, N); // Test the assignment schemes
