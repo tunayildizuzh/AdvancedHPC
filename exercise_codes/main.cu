@@ -377,10 +377,11 @@ int main(int argc, char *argv[]) {
 
     // We use the same memory as the input grid (in-place)
     array3D_c fft_grid(reinterpret_cast<complex_type*>(grid.data()),shape(N,N,N/2+1),neverDeleteData);
-
+    
+    // COMPUTE FFT 2D AND 1D REQUIRES ONLY 1 CALL. 
     // Compute the fft of the over-density field
     compute_fft_2D_R2C(grid,fft_grid,N);
-    compute_fft_2D_C2C(grid,fft_grid,N);
+    compute_fft_1D_C2C(fft_grid,N);
     // Compute the power spectrum
     compute_pk(fft_grid, N);
 
