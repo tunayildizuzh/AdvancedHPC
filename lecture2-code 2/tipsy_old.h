@@ -231,8 +231,7 @@ public:
     // If the position/velocity array is given as a 2D then call the 1D version
     template<typename typeR=float,typename typeV=typeR,typename typeM=typeV>
     void load(rarray2<typeR> &r) {
-        using blitz::secondRank;
-        using blitz::Range;
+        using blitz::secondRank, blitz::Range;
         assert(r.base(secondRank)==0 && r.extent(secondRank)==3);
         rarray1<typeR> x = r(Range::all(),0);
         rarray1<typeR> y = r(Range::all(),1);
