@@ -3,8 +3,8 @@
 #include <complex>
 #include <stdlib.h>
 #include <sys/time.h>
-//#include <fftw3.h>
-#include "cufftw.h"
+#include <cufftw.h>
+#include "cufft.h"
 
 #include "aweights.hpp"
 #include "tipsy.h"
@@ -45,7 +45,7 @@ array2D_r read_particles(string fname){
 
     // Allocate the particle buffer
     array2D_r p(io.count(),3);
-
+    
     t0 = getTime();
     // Read the particles
     io.load(p);
@@ -67,7 +67,7 @@ void write_array(T A, const char* filename){
 
     ofs << A << endl;
 
-    ofs.close();
+    ofs.close(); 
     return;
 }
 
@@ -110,7 +110,7 @@ void assign_mass(int o, real_type x, real_type y, real_type z, array3D_r &grid){
         case 2: _assign_mass<2>(x,y,z,grid); break;
         case 3: _assign_mass<3>(x,y,z,grid); break;
         case 4: _assign_mass<4>(x,y,z,grid); break;
-        default:
+        default: 
             cerr << "Incorrect mass assignment order: " << o << endl;
             abort();
     }
@@ -183,78 +183,7 @@ void compute_fft_cuda(array3D_r &grid, array3D_c &fft_grid, int N){
 
 //**********************************************************************
 
-// The simple way to calculate the 3D FFT - let FFTW worry about it
-void compute_fft(array3D_r &grid, array3D_c &fft_grid, int N){
-    double t0, elapsed;
-
-    // Create FFTW plan
-    t0 = getTime();
-    auto plan = fftw_plan_dft_r2c_3d(N,N,N,
-            grid.dataFirst(),
-            reinterpret_cast<fftw_complex*>(fft_grid.dataFirst()),
-            FFTW_ESTIMATE);
-    elapsed = getTime()-t0;
-    cerr << "fftw_plan creation: " << elapsed << " s" << endl;
-
-    // Execute FFTW plan
-    execute_plan(plan);
-
-    // Destroy FFTW plan
-    fftw_destroy_plan(plan);
-}
-
-//**********************************************************************
-
-// calculate a set of real to complex FFT along dimension 3
-void compute_fft_1D_R2C(array3D_r &grid, array3D_c &fft_grid, int N){
-    double t0, elapsed;
-
-    // 1D FFT of the last dimensions: R2C
-    int n[] = {N};       // 1D FFT of length "N"
-    int *inembed = n,
-	*onembed = n;
-    int howmany = N*N;
-    int odist = N/2+1;   // Output distance is in "complex"
-    int idist = 2*odist; // Input distance is in "real"
-    int istride = 1,     // Elements of each FFT are adjacent
-	ostride = 1;
-    auto plan1 = fftw_plan_many_dft_r2c(
-    	sizeof(n)/sizeof(n[0]), n, howmany,
-    	grid.dataFirst(),
-    	inembed,istride, idist,
-	reinterpret_cast<fftw_complex*>(fft_grid.dataFirst()),
-	onembed,ostride,odist,
-	FFTW_ESTIMATE);
-    execute_plan(plan1);
-    fftw_destroy_plan(plan1);
-}
-
-// Given step 1 above, do the remaining as a 2D transform
-void compute_fft_2D_C2C(array3D_c &fft_grid, int N){
-    // 2D FFT of the 1st dimensions: C2C
-    int n[] = {N,N};
-    int *inembed = n, *onembed = n;
-    int howmany = N/2+1;
-    int idist = 1;
-    int odist = 1;
-    int istride = N/2+1, ostride = N/2+1;
-
-    auto plan1 = fftw_plan_many_dft(sizeof(n)/sizeof(n[0]), n, howmany,
-    	     	    reinterpret_cast<fftw_complex*>(fft_grid.dataFirst()),
-    	     	    inembed, istride, idist,
-		    reinterpret_cast<fftw_complex*>(fft_grid.dataFirst()),
-		    onembed,ostride,odist, FFTW_FORWARD, FFTW_ESTIMATE);
-    execute_plan(plan1);
-    fftw_destroy_plan(plan1);
-}
-
-//**********************************************************************
-
-// (alternative)
-void compute_fft_2D_R2C(array3D_r &grid, array3D_c &fft_grid, int N){
-    double t0, elapsed;
-
-    // 2D FFT of the last dimensions: R2C
+void compute_fft_2D_R2C(array3D_r &grid, array3D_c &fft_grid, int N) {
     int n[] = {N,N};       // 2D FFT of length NxN
     int inembed[] = {N,2*(N/2+1)};
     int onembed[] = {N,(N/2+1)};
@@ -263,34 +192,134 @@ void compute_fft_2D_R2C(array3D_r &grid, array3D_c &fft_grid, int N){
     int idist = 2*odist;   // Input distance is in "real"
     int istride = 1,       // Elements of each FFT are adjacent
 	ostride = 1;
-    auto plan1 = fftw_plan_many_dft_r2c(
+    double t0 = getTime();
+#if 1
+    cufftHandle plan;
+    cufftPlanMany(&plan,sizeof(n)/sizeof(n[0]), n,
+		    inembed,istride,idist,
+		    onembed,ostride,odist,
+		    CUFFT_D2Z,howmany);
+    cufftDoubleComplex *data;
+    cudaMalloc((void**)&data, sizeof(cufftDoubleComplex)*N*N*(N/2+1));
+    cudaMemcpy(data, grid.dataFirst(), sizeof(cufftDoubleComplex)*N*N*(N/2+1), cudaMemcpyHostToDevice);
+    cufftExecD2Z(plan,reinterpret_cast<cufftDoubleReal*>(data),data);
+    cudaMemcpy(grid.dataFirst(), data,sizeof(cufftDoubleComplex)*N*N*(N/2+1), cudaMemcpyDeviceToHost);
+    cudaDeviceSynchronize();
+    cudaFree(data);
+    cufftDestroy(plan);
+#else
+    auto plan = fftw_plan_many_dft_r2c(
     	sizeof(n)/sizeof(n[0]), n, howmany,
     	grid.dataFirst(),
     	inembed,istride, idist,
 	reinterpret_cast<fftw_complex*>(fft_grid.dataFirst()),
 	onembed,ostride,odist,
 	FFTW_ESTIMATE);
-    execute_plan(plan1);
-    fftw_destroy_plan(plan1);
+    execute_plan(plan);
+    fftw_destroy_plan(plan);
+#endif
+    double elapsed = getTime()-t0;
+    cerr << "2D R2C FFT CUDA: " << elapsed << " s" << endl;
 }
 
 void compute_fft_1D_C2C(array3D_c &fft_grid, int N){
-    // 1D FFT of the 1st dimensions: C2C
+    // 2D FFT of the 1st dimensions: C2C
     int n[] = {N};
     int *inembed = n, *onembed = n;
     int howmany = N*(N/2+1);
     int idist = 1;
     int odist = 1;
     int istride = N*(N/2+1), ostride = N*(N/2+1);
-
-    auto plan1 = fftw_plan_many_dft(sizeof(n)/sizeof(n[0]), n, howmany,
+#if 1
+    cufftHandle plan;
+    cufftPlanMany(&plan,sizeof(n)/sizeof(n[0]), n,
+                    inembed,istride,idist,
+                    onembed,ostride,odist,
+                    CUFFT_Z2Z,howmany);
+    cufftDoubleComplex *data;
+    cudaMalloc((void**)&data, sizeof(cufftDoubleComplex)*N*N*(N/2+1));
+    cudaMemcpy(data, fft_grid.dataFirst(), sizeof(cufftDoubleComplex)*N*N*(N/2+1), cudaMemcpyHostToDevice);
+    cufftExecZ2Z(plan,data,data,CUFFT_FORWARD);
+    cudaMemcpy(fft_grid.dataFirst(), data,sizeof(cufftDoubleComplex)*N*N*(N/2+1), cudaMemcpyDeviceToHost);
+    cudaDeviceSynchronize();
+    cudaFree(data);
+    cufftDestroy(plan);
+#else
+    auto plan = fftw_plan_many_dft(sizeof(n)/sizeof(n[0]), n, howmany,
     	     	    reinterpret_cast<fftw_complex*>(fft_grid.dataFirst()),
     	     	    inembed, istride, idist,
 		    reinterpret_cast<fftw_complex*>(fft_grid.dataFirst()),
 		    onembed,ostride,odist, FFTW_FORWARD, FFTW_ESTIMATE);
-    execute_plan(plan1);
-    fftw_destroy_plan(plan1);
+    execute_plan(plan);
+    fftw_destroy_plan(plan);
+#endif
 }
+
+//**********************************************************************
+
+void compute_fft_2D_R2C_stream(array3D_r &grid, array3D_c &fft_grid, int N) {
+    int n[] = {N,N};       // 2D FFT of length NxN
+    int inembed[] = {N,2*(N/2+1)};
+    int onembed[] = {N,(N/2+1)};
+    const int howmany = 16;// Number of slabs to do at once
+    int odist = N*(N/2+1); // Output distance is in "complex"
+    int idist = 2*odist;   // Input distance is in "real"
+    int istride = 1,       // Elements of each FFT are adjacent
+	ostride = 1;
+    const int nStreams = 4;
+
+    double t0 = getTime();
+
+    // Allocate the CUDA streams. Each stream can execute independently
+    cudaStream_t stream[nStreams];
+    for(auto i=0; i<nStreams; ++i) cudaStreamCreate(stream+i);
+
+    // Allocate a single chunk on the GPU, but separate it into blocks
+    cufftDoubleComplex *data[nStreams];
+    int block_count = howmany*N*(N/2+1);
+    cudaMalloc((void**)data, sizeof(cufftDoubleComplex)*nStreams*block_count);
+    for(auto i=1; i<nStreams; ++i) data[i] = data[0] + i*block_count;
+
+    // Create a plan to do "howmany" slabs at a time
+    // This plan will be run simultaneously on multiple streams so that
+    // means we have to create "work areas" for each. Instead of calling
+    // cufftPlanMany we call cufftMakePlanMany so we can disable auto allocation
+    // of the work area. Later we need to call cufftSetWorkArea.
+    cufftHandle plan;
+    size_t workSize;
+    cufftCreate(&plan);
+    cufftSetAutoAllocation(plan,0);
+    cufftMakePlanMany(plan,sizeof(n)/sizeof(n[0]), n,
+		    inembed,istride,idist,
+		    onembed,ostride,odist,
+		    CUFFT_D2Z,howmany,&workSize);
+    void *workArea[nStreams];
+    // We allocate "nStreams" work areas and set pointer to them for each stream
+    cudaMalloc(&workArea[0],workSize*nStreams);
+    for(auto i=1; i<nStreams; ++i) workArea[i] = reinterpret_cast<char*>(workArea[0]) + i*workSize;
+
+
+    // Distribute the work on the streams
+    int iStream = 0;
+    for(auto i=grid.lbound(0); i<=grid.ubound(0); i+=howmany) {
+	cudaMemcpyAsync(data[iStream], &grid(i,0,0), sizeof(cufftDoubleComplex)*block_count, cudaMemcpyHostToDevice,stream[iStream]);
+	cufftSetStream(plan,stream[iStream]);
+	cufftSetWorkArea(plan,workArea[iStream]);
+	cufftExecD2Z(plan,reinterpret_cast<cufftDoubleReal*>(data[iStream]),data[iStream]);
+	cudaMemcpyAsync(&grid(i,0,0),data[iStream],sizeof(cufftDoubleComplex)*block_count, cudaMemcpyDeviceToHost,stream[iStream]);
+	if (++iStream == nStreams) iStream = 0;
+    }
+    cudaDeviceSynchronize(); // Wait for all streams to complete
+    cudaFree(data[0]);
+    cudaFree(workArea[0]);
+    cufftDestroy(plan);
+    for(auto i=0; i<nStreams; ++i) cudaStreamDestroy(stream[i]);
+
+    double elapsed = getTime()-t0;
+    cerr << "2D R2C FFT streaming: " << elapsed << " s" << endl;
+}
+
+
 
 //**********************************************************************
 
@@ -356,7 +385,6 @@ void compute_pk(array3D_c &fft_grid, int N){
     }
 }
 
-// First argument is main, second argument is file name, third argument is grid size.
 int main(int argc, char *argv[]) {
     if (argc!=3) {
 	cerr << "Usage: " << argv[0] << " <input> <grid" << endl;
@@ -367,7 +395,7 @@ int main(int argc, char *argv[]) {
 
     cerr << "Reading " << fname << endl;
     array2D_r p = read_particles(fname);
-
+    
     //test_assignment(p, N); // Test the assignment schemes
 
     // The grid has to be slighly larger for an in-place transformation
@@ -378,10 +406,12 @@ int main(int argc, char *argv[]) {
     // We use the same memory as the input grid (in-place)
     array3D_c fft_grid(reinterpret_cast<complex_type*>(grid.data()),shape(N,N,N/2+1),neverDeleteData);
     
-    // COMPUTE FFT 2D AND 1D REQUIRES ONLY 1 CALL. 
     // Compute the fft of the over-density field
-    compute_fft_2D_R2C(grid,fft_grid,N);
+    compute_fft_2D_R2C(grid, fft_grid, N);
+    //compute_fft_2D_R2C_stream(grid,fft_grid,N);
     compute_fft_1D_C2C(fft_grid,N);
+
+
     // Compute the power spectrum
     compute_pk(fft_grid, N);
     
