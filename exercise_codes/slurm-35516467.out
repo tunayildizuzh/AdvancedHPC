@@ -1,0 +1,24 @@
+Reading b0-final.std
+Found 158095 particles.
+particle reading: 0.651181 s
+mass assignment: 0.337053 s
+fftw_plan execution: 0.000703096 s
+fftw_plan execution: 0.000614882 s
+P(k) measurement: 0.0594931 s
+
+
+Batch Job Summary Report (version 21.01.1) for Job "test" (35516467) on daint
+
+Job information (1/2)
+-----------------------------------------------------------------------------------------------------
+             Submit            Eligible               Start                 End    Elapsed Time limit
+------------------- ------------------- ------------------- ------------------- ---------- ----------
+2021-12-15T14:44:53 2021-12-15T14:44:53 2021-12-15T14:44:54 2021-12-15T14:45:03   00:00:09   00:30:00
+-----------------------------------------------------------------------------------------------------
+
+Job information (2/2)
+-------------------------------------------------------------
+    Username      Account    Partition   NNodes        Energy
+------------ ------------ ------------ -------- -------------
+    yerdemtu         uzg2        debug        1      0.293 kJ
+

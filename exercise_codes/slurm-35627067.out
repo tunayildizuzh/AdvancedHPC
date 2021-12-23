@@ -1,0 +1,20 @@
+slurmstepd: error: execve(): /users/yerdemtu/AdvancedHPC/exercise_codes/./Exercise1: No such file or directory
+srun: error: nid02359: task 0: Exited with exit code 2
+srun: launch/slurm: _step_signal: Terminating StepId=35627067.0
+
+
+Batch Job Summary Report (version 21.01.1) for Job "test" (35627067) on daint
+
+Job information (1/2)
+-----------------------------------------------------------------------------------------------------
+             Submit            Eligible               Start                 End    Elapsed Time limit
+------------------- ------------------- ------------------- ------------------- ---------- ----------
+2021-12-22T13:38:48 2021-12-22T13:38:49 2021-12-22T13:38:49 2021-12-22T13:38:56   00:00:07   00:30:00
+-----------------------------------------------------------------------------------------------------
+
+Job information (2/2)
+-------------------------------------------------------------
+    Username      Account    Partition   NNodes        Energy
+------------ ------------ ------------ -------- -------------
+    yerdemtu         uzg2        debug        1      0.184 kJ
+
