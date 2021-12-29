@@ -3,6 +3,7 @@
 #include <complex>
 #include <stdlib.h>
 #include <sys/time.h>
+#include <fftw3-mpi.h>
 #include <fftw3.h>
 #include <mpi.h>
 #include <omp.h>
@@ -20,6 +21,15 @@ typedef blitz::Array<real_type,3> array3D_r;
 
 typedef blitz::Array<complex_type,3> array3D_c;
 
+void in_place_reduce(int rank, int root, void * buff, int size, MPI_Datatype, MPI_Op, MPI_Comm comm){
+	
+	// MPI In-place Reduction.
+	if(rank == root){
+		MPI_Reduce(MPI_IN_PLACE, buff, size, dtype, op, root, comm);
+	} else {
+		MPI_Reduce(buff, NULL, size, dtyoe, op, root, comm);
+	}
+}
 
 // A simple timing function
 double getTime() {
@@ -42,11 +52,11 @@ array2D_r read_particles(string fname,int size,int rank){
         cerr << "Unable to open file" << endl;
         abort();
     }
-    int N = io.count();
-    int n = (N + (size-1))/size;
-    int istart = rank*n
-    int iend;
-    int num_rows = N/size;
+    int N = io.count();  		// Total Particle.
+    int n = (N + (size-1))/size;	// Particle per rank.
+    int istart = rank*n			// Start index.
+    int iend;				// End index.
+    int num_rows = N/size;		// Number of rows.
     if(istart + n-1 < N){
 	iend = istart + n-1;
     } else {
@@ -58,6 +68,8 @@ array2D_r read_particles(string fname,int size,int rank){
     t0 = getTime();
     // Read the particles
     io.load(p);
+
+    MPI_Barrier(MPI_COMM_WORLD);
     elapsed = getTime() - t0;
 
     cout << "particle reading: " << elapsed << " s" << endl;
@@ -129,26 +141,50 @@ void assign_mass(int o, real_type x, real_type y, real_type z, array3D_r grid){
 // Mass assignment for a list of particles
 void assign_masses(int o, array2D_r p, array3D_r &grid, int rank, int size){
     double t0, elapsed;
-    auto N_part = p.shape()[0]; // Do i still need this?
+    auto N = shape[1];
     auto shape = grid.shape();
     
-    array3D_r grid_nopad = grid(blitz::Range::all(), blitz::Range::all(),blitz::Range(0,shape[2]-3]));    
+    array3D_r grid_nopad = grid(blitz::Range::all(), blitz::Range::all(),blitz::Range(0,N-1));    
     t0 = getTime();
     #pragma omg parallel for
     for(auto i=p.lbound(0), i <= p.ubound(0); ++i){
         assign_mass(o, p(i,0), p(i,1), p(i,2), grid_nopad);
     }
-    if(rank==0){
-	    MPI_Reduce(MPI_IN_PLACE,grid.data(),grid.size(),MPI_DOUBLE,MPI_SUM,0,MPI_COMM_WORLD);
-    }else{
-	    MPI_Reduce(grid.data(),NULL,grid.size(),MPI_DOUBLE,MPI_SUM,0,MPI_COMM_WORLD);
-    }
+    //if(rank==0){
+	   // MPI_Reduce(MPI_IN_PLACE,grid.data(),grid.size(),MPI_DOUBLE,MPI_SUM,0,MPI_COMM_WORLD);
+   // }else{
+	   // MPI_Reduce(grid.data(),NULL,grid.size(),MPI_DOUBLE,MPI_SUM,0,MPI_COMM_WORLD);
+    //}
     
     // Compute the average density per grid cell
-    real_type avg = blitz::sum(grid_nopad) / (grid_nopad.size());
-
+    real_type avg = blitz::sum(grid) / (N*N*N);
+   
+    MPI_Allreduce(MPI_IN_PLACE,&avg, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
     // Turn the density into the over-density
     grid = (grid - avg) / avg;
+
+    int dst = (rank+1+size)%size;
+    int stc = (rank-1+size)%size;
+
+    if(dst != src) {
+	    int count = 3*shape[1]*shape[2];
+	    int offset = (shape[0]-3)*shape[1]*shape[2];
+
+	    MPI_Request req;
+	    real_type *data = new real_type[count];
+	    MPI_Irecv(data,count,MPI_DOUBLE,src,0,MPI_COMM_WORLD,&req);
+	    
+	    MPI_Send(grid.dataFirst() + offset, count, MPI_DOUBLE, dst, 0, MPI_COMM_WORLD);
+	    MPI_Wait(&req, MPI_STATUS_IGNORE);
+
+	    for(auto i=0; i<count; i++){
+		    grid.dataFirst()[i] += data[i] + 1;
+
+	    }
+
+    	    MPI_Barrier(MPI_COMM_WORLD);
+    }
+
     elapsed = getTime()-t0;
     cout << "mass assignment: " << elapsed << " s" << endl;
 }
@@ -174,13 +210,16 @@ void test_assignment(array2D_r p, int N){
 
 void compute_fft(array3D_r grid, array3D_c fft_grid, int N, MPI_Comm comm){
     double t0, elapsed;
+    int rank;
+    MPI_Comm_rank(comm, &rank);
 
     // Create FFTW plan
     t0 = getTime();
     auto plan = fftw_plan_dft_r2c_3d(N,N,N,
             grid.dataFirst(),
-            reinterpret_cast<fftw_complex*>(fft_grid.dataFirst()),
-            FFTW_ESTIMATE);
+            reinterpret_cast<fftw_complex*>(fft_grid.dataFirst()),comm, FFTW_ESTIMATE);
+
+    MPI_Barrier(MPI_COMM_WORLD);
     elapsed = getTime()-t0;
     cout << "fftw_plan creation: " << elapsed << " s" << endl;
 
@@ -188,6 +227,7 @@ void compute_fft(array3D_r grid, array3D_c fft_grid, int N, MPI_Comm comm){
     // Execute FFTW plan
     t0 = getTime();
     fftw_execute(plan);
+
     elapsed = getTime()-t0;
     cout << "fftw_plan execution: " << elapsed << " s" << endl;
 
@@ -195,7 +235,7 @@ void compute_fft(array3D_r grid, array3D_c fft_grid, int N, MPI_Comm comm){
     fftw_destroy_plan(plan);
 }
 
-void compute_pk(array3D_c fft_grid, int N){
+void compute_pk(array3D_c fft_grid, int N, int rank){
     double t0, elapsed;
     int iNyquist = N / 2;
     int nBins = iNyquist;
@@ -219,6 +259,9 @@ void compute_pk(array3D_c fft_grid, int N){
         int kx = pos[0]>iNyquist ? N - pos[0] : pos[0];
         int ky = pos[1]>iNyquist ? N - pos[1] : pos[1];
         int kz = pos[2];
+	
+	if(kx==0 && ky==0 && kz==0) continue;
+
 
         int mult = (kz == 0) || (kz == iNyquist) ? 1 : 2;
 
@@ -234,6 +277,11 @@ void compute_pk(array3D_c fft_grid, int N){
         power(bin_idx)   += mult*norm(cplx_amplitude);
         n_power(bin_idx) += mult;
     }
+
+    reduce_in_place(rank, 0, log_k.data(), nBins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    reduce_in_place(rank, 0, power.data(), nBins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    reduce_in_place(rank, 0, n_power.data(), nBins, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD);
+
     elapsed = getTime() - t0;
 
     cout << "P(k) measurement: " << elapsed << " s" << endl;
@@ -244,6 +292,56 @@ void compute_pk(array3D_c fft_grid, int N){
         }
     }
 }
+
+int slab_idx(real_type pos_x, int N, int * domain, int size){
+	if(size==0) return 0;
+	AssignmentWrights<4> wx((pos_x+0.5)*N);
+	int i = (wx*i+N)%N;
+	int idx;
+	for(idx=0; idx<size-1; idx++){
+		if(i<domain[idx+1]){
+			break;
+		}
+	}
+	return idx;
+}
+
+void sort_particles(array2D_r &p, int N, int* domain, int size){
+	int iStart = p.lbound(0);
+	int iEnd = p.ubound(0);
+	vector<int> count_list(size+1, 0);
+	array2D_r out(blitz::Range(iStart, iEnd), blitz::Range(0,2));
+
+	int idx;
+        #pragma omp parallel for
+	for(int i =iStart; i<= iEnd; i++){
+		idx = slab_idx(p(i,0), N, domain, size);
+                #pragma omp atomic
+		count_list[idx] ++;
+	}
+	int pos;
+
+        #pragma omp parallel for
+	for(int i= iEnd; i >= iStart; i--){
+		idx = slab_idx(p(i,0), N, domain, size);
+
+
+        	#pragma omp atomic capture
+		{pos = count_list[idx]; count_list[idx]--;}
+
+		out(iStart + pos-1, 0) = p(i,0);
+		out(iStart + pos-1, 1) = p(i,1);
+		out(iStart + pos-1, 2) = p(i,2);
+	}
+
+        #pragma omp parallel for
+	for(int i =iStart; i<= iEnd; i++){
+		p(i,0) = out(i,0);
+		p(i,1) = out(i,1);
+		p(i,2) = out(i,2);
+	}
+}
+
 // Communicating with FFTW to determine how the data is organized.
 // N is being the grid size and returns the number of slabs (local_n0)
 // local_0_start is the starting slab.
