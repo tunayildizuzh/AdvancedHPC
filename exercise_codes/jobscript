@@ -5,13 +5,13 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-core=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=128
+#SBATCH --cpus-per-task=1
 #SBATCH --partition=debug
 #SBATCH --hint=nomultithread
 #SBATCH --constraint=mc
-##SBATCH --output=AtomicParallelRunThread128.txt
+##SBATCH --output=assignment_512.txt
 
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-srun ./main > terminal101200utput.out
+srun ./main > assignment_512.out

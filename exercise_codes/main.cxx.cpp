@@ -319,6 +319,9 @@ void sort_particles(array2D_r &p, int N, int* domain, int size){
                 #pragma omp atomic
 		count_list[idx] ++;
 	}
+	for(int i =1; i<count_list.size();i++)
+		count_list[i] += count_list[i-1];
+
 	int pos;
 
         #pragma omp parallel for
@@ -340,6 +343,58 @@ void sort_particles(array2D_r &p, int N, int* domain, int size){
 		p(i,1) = out(i,1);
 		p(i,2) = out(i,2);
 	}
+}
+
+array2D_r balance_particles(array2D_r p, ptrdiff_t local_0_start, int N, int rank, int size) {
+	double t0, elapsed;
+	t0 = getTime();
+	int *domain = new int[size];
+
+	MPI_Allgather(&local_0_start, 1, MPI_INTEGER, domain, 1, MPI_INTEGER, MPI_COMM_WORLD);
+
+	sort_particles(p,N,domain,size);
+
+	int* send_counts = new int[size];
+	int* recv_count = new int[size];
+	int* send_offset = new int[size];
+	int* recv_offset = new int[size];
+
+	for(auto i=0; i<size; i++) {
+		send_counts[i]=0;
+		send_offset[i]=0;
+		recv_offset[i]=0;
+	}
+
+        #pragma omp parallel for
+	for(auto i =p.lbound(0); i<=p.ubound(0); ++i) {
+		int idx = slab_idx(p(i,0),N,domain,size);
+                #pragma omp atomic
+		send_counts[idx]++;
+	}
+
+	MPI_Alltoall(send_counts, 1, MPI_INTEGER, recv_counts, 1, MPI_INTEGER, MPI_COMM_WORLD);
+
+	int n_part = 0;
+
+	for(int i=0; i<size; i++){
+		n_part += recv_counts[i];
+		recv_counts[i] *= 3;
+		send_counts[i] *= 3;
+		if(i>1){
+			send_offset[i] = send_offset[i-1] + send_counts[i-1];
+			recv_offset[i] = recv_offset[i-1] + recv_counts[i-1];
+		}
+	}
+
+	array2D_r p_balanced(n_part,3);
+
+	MPI_Alltoallv(p,dataFirst(), send_counts, send_offset, MPI_DOUBLE, p_balanced,dataFirst(),recv_counts, recv_offset, MPI_DOUBLE, MPI_COMM_WORLD);
+
+	elapsed = getTime() - t0;
+	if(rank==0)
+		cout << "Load Balancing: " << elapsed << " s" << endl;
+
+	return p_balanced;
 }
 
 // Communicating with FFTW to determine how the data is organized.
@@ -374,7 +429,7 @@ void printArray(vector<double>& arr){
     cout << "\n";
 }
 
-vector<int> idx_vector = {1,0,0};
+//vector<int> idx_vector = {1,0,0};
 
 vector<double> reorder_p(array2D_r p, int N, int starts_at) {
 	array2D_r reordered_p(blitz::Range(0,N),blitz::Range(0,2));
@@ -404,16 +459,6 @@ vector<double> reorder_p(array2D_r p, int N, int starts_at) {
 	MPI_Alltoallv(&p,send_count,disp,MPI_DOUBLE,reordered_p,disp,MPI_DOUBLE,MPI_COMM_WORLD);
 }
 
-void PPS_Binning(int rank,int size) {	// Parallel Power Spectrum binning with MPI_Reduce.
-
-
-	MPI_Comm_size(MPI_COMM_WORLD,&size);
-	MPI_Comm_rank(MPI_COMM_WORLD,&rank);
-
-	MPI_Reduce(log_k, sizeof(log_k)/sizeof(log_k[0], MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-	MPI_Reduce(power, sizeof(power)/sizeof(power[0], MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-	MPI_Reduce(n_power, sizeof(n_power)/sizeof(n_power[0]), MPI_INT64_t, MPI_SUM, 0, MPI_COMM_WORLD);
-}
 
 int main(int argc, char *argv[]) {
     int thread_support;
@@ -427,7 +472,7 @@ int main(int argc, char *argv[]) {
     fftw_mpi_init();
     fftw_init_threads();
     fftw_plan_with_nthreads(omp_get_max_threads());
-    int N = 64;
+    int N = 512;
     string fname = "/store/uzh/uzh8/ESC412/ic_512.std"; 
     array2D_r p = read_particles(fname,rank,size);
 
@@ -440,15 +485,21 @@ int main(int argc, char *argv[]) {
 
     ptrdiff_t alloc_local, local_n0, local_0_start;
 
-    alloc_local = fftw_mpi_local_size_3d(N,N,N/2+1, MPI_COMM_WORLD, &local_n0, &local_0_start);
+    alloc_local = fftw_mpi_local_size_3d(N,N,N, MPI_COMM_WORLD, &local_n0, &local_0_start);
     blitz::GeneralArrayStorage<3> storage;
     storage.base(local_n0_start,0,0);
-    double *local_grid_space = fftw_alloc_real((local_n0_start+3)*N*(N+2));  // For the real part. 
-    array3D_r grid(local_grid_space,blitz::shape(local_n0_start+3,N,N+2,neverDeleteData,storage));    
+    storage.base = local_0_start, 0,0;
+    double *local_grid_space = fftw_alloc_real((local_n0_start+3)*N*2*(N/2+1));  // For the real part. 
+    array3D_r grid(local_grid_space,blitz::shape(local_n0_start+3,N,2*(N/2+1),neverDeleteData,storage));
+    grid = 0;    
     // array3D_r grid(local_n0,N,N+2);
-    double *local_grid_space_complex = fftw_alloc_complex((local_n0+3)*N*(N/2));
+    assign_masses(4,p_balanced,grid,rank,size);
+    p_balanced.free();
+    
+    double *local_grid_space_complex = fftw_alloc_complex((local_n0)*N*(N/2+1));
+    array3D_c fft_grid(reinterpret_cast<complex_type*>(local_slab_cplx), blitz::shape(local_n0,N,N/2+1),storage);
+    fft_grid = 0;
 
-    assign_masses(4,p,grid,rank,size);
     int dest = (rank +1) % 2 * size;
     int src = (rank -1) % 2 * size;
     // To avoid deadlock, MPI_Irecv is called before MPI_Send.
@@ -457,11 +508,11 @@ int main(int argc, char *argv[]) {
     MPI_Send(&grid, local_grid_space, MPI_DOUBLE, dest, 0, MPI_COMM_WORLD);
     array3D_c grid_complex(local_grid_space_complex,blitz::shape(local_n0+3,N,N+2,neverDeleteData,storage)); // For the complex part.
     //array3D_c fft_grid(local_n0,N,N/2+1);
-    compute_fft(grid,grid_complex,N,MPI_COMM_WORLD);
-    compute_pl(grid_complex,N);
+    compute_fft(grid,fft_grid,N,MPI_COMM_WORLD);
+    compute_pk(fft_grid,N,rank);
     
     // Binning with MPI_Reduce.
-    PPS_Binning(rank,size); 
+    //PPS_Binning(rank,size); 
     //cout << p << endl; //
     /*  
     test_assignment(p, N); // Test the assignment schemes
