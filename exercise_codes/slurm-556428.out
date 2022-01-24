@@ -1,3 +1,0 @@
-slurmstepd: error: execve(): /users/yerdemtu/AdvancedHPC/exercise_codes/./main: No such file or directory
-srun: error: nid001884: task 0: Exited with exit code 2
-srun: launch/slurm: _step_signal: Terminating StepId=556428.0
