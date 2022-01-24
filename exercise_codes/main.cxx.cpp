@@ -523,11 +523,11 @@ int main(int argc, char *argv[]) {
     // Allocate the output buffer for the fft
     array3D_c fft_grid(N,N,N/2+1);
     
-    // Compute the fft of the over-density field
+    // Compute the fft of the over-density field.
     // The results are stored in fft_grid (out-of-place method)
     compute_fft(grid, fft_grid, N);
     
-    // Compute the power spectrum
+    // Compute the power spectrum.
     compute_pk(fft_grid, N);
     */
     fftw_mpi_cleanup();
